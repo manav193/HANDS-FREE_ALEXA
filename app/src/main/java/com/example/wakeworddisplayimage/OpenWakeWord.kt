@@ -22,7 +22,6 @@ import com.example.wakeworddisplayimage.ml.EmbeddingModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.tensorflow.lite.DataType
@@ -59,11 +58,8 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
 
     private val requestPermissionLauncher: ActivityResultLauncher<String> =
         context.registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
-            if (isGranted) {
-                startListeningForKeyword()
-            } else {
-                Toast.makeText(context, "Microphone permission is required", Toast.LENGTH_SHORT).show()
-            }
+            if (isGranted) startListeningForKeyword()
+            else Toast.makeText(context, "Microphone permission is required", Toast.LENGTH_SHORT).show()
         }
 
     private fun initializeModels() {
@@ -89,7 +85,6 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
             requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
             return null
         }
-
         val recorder = AudioRecord(
             MediaRecorder.AudioSource.MIC,
             16000,
@@ -97,7 +92,6 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
             AudioFormat.ENCODING_PCM_FLOAT,
             audioBufferSizeInBytes
         )
-
         if (recorder.state != AudioRecord.STATE_INITIALIZED) {
             Log.e("AudioRecord", "AudioRecord initialization failed")
             recorder.release()
@@ -107,17 +101,18 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
     }
 
     fun startListeningForKeyword() {
-        if (isListening || (listenJob?.isActive == true)) return
-
-        try {
-            initializeModels()
-        } catch (_: Exception) {
-            return
-        }
+        if (isListening || listenJob?.isActive == true) return
+        try { initializeModels() } catch (_: Exception) { return }
 
         val recorder = initializeMicrophone() ?: return
         audioRecord = recorder
-        recorder.startRecording()
+        try {
+            recorder.startRecording()
+        } catch (e: Exception) {
+            Log.e("AudioRecord", "Unable to start recording", e)
+            releaseRecorderIfOwned(recorder)
+            return
+        }
         isListening = true
 
         listenJob = CoroutineScope(Dispatchers.IO).launch {
@@ -129,7 +124,6 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
                         if (isListening) Log.w("openWakeWord", "AudioRecord read returned $floatsRead")
                         continue
                     }
-
                     bufferRawData()
                     bufferMelspec()
                     bufferEmbeddings()
@@ -139,32 +133,36 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
                         patience--
                         continue
                     }
-
                     if (confidence[0] <= 0.35f) continue
-
                     val verifierScore = verifierOnnxPredict(embeddingBuffer) ?: continue
                     if (verifierScore <= 0.35f) continue
 
                     patience = maxPatience
-                    onWakeWordDetected()
+                    onWakeWordDetected(recorder)
+                    break
                 }
             } catch (e: Exception) {
                 if (isListening) Log.e("openWakeWord", "Wake-word loop stopped", e)
             } finally {
-                releaseRecorderIfOwned(recorder)
+                if (audioRecord === recorder) releaseRecorderIfOwned(recorder)
             }
         }
     }
 
-    private suspend fun onWakeWordDetected() {
+    private suspend fun onWakeWordDetected(recorder: AudioRecord) {
+        // Critical: release our microphone BEFORE launching Alexa.
+        // Otherwise Alexa and this detector can fight for the same MIC and the UI may appear frozen.
+        isListening = false
+        if (audioRecord === recorder) {
+            releaseRecorderIfOwned(recorder)
+            audioRecord = null
+        }
+
         withContext(Dispatchers.Main.immediate) {
             viewModel.addCount()
             playSound()
             launchAlexa()
         }
-
-        // Stop processing before Alexa takes over the microphone.
-        isListening = false
     }
 
     private fun launchAlexa() {
@@ -198,11 +196,8 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
         } catch (e: Exception) {
             Log.w("AudioRecord", "Failed to stop recorder cleanly", e)
         } finally {
-            try {
-                recorder.release()
-            } catch (e: Exception) {
-                Log.w("AudioRecord", "Failed to release recorder", e)
-            }
+            try { recorder.release() }
+            catch (e: Exception) { Log.w("AudioRecord", "Failed to release recorder", e) }
             if (audioRecord === recorder) audioRecord = null
         }
     }
@@ -215,57 +210,44 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
 
     private fun bufferMelspec() {
         val melspecPredictions = melspecOnnxPredict(rawDataBuffer) ?: return
-        for (i in 0 until 68) {
-            for (j in 0 until 32) {
-                melspecBuffer[0][i][j][0] = melspecBuffer[0][i + 8][j][0]
-            }
-        }
-        for (i in 0 until 8) {
-            for (j in 0 until 32) {
-                melspecBuffer[0][68 + i][j][0] = 2 + melspecPredictions[0][0][i][j] / 10
-            }
-        }
+        for (i in 0 until 68) for (j in 0 until 32)
+            melspecBuffer[0][i][j][0] = melspecBuffer[0][i + 8][j][0]
+        for (i in 0 until 8) for (j in 0 until 32)
+            melspecBuffer[0][68 + i][j][0] = 2 + melspecPredictions[0][0][i][j] / 10
     }
 
     private fun bufferEmbeddings() {
         val embeddingPredictions = embeddingModelPredict(embeddingInput(melspecBuffer))
         val newEmbeddings = embeddingPredictions.floatArray
-        for (i in 0 until 15) {
-            for (j in 0 until 96) embeddingBuffer[0][i][j] = embeddingBuffer[0][i + 1][j]
-        }
+        for (i in 0 until 15) for (j in 0 until 96)
+            embeddingBuffer[0][i][j] = embeddingBuffer[0][i + 1][j]
         for (j in 0 until 96) embeddingBuffer[0][15][j] = newEmbeddings[j]
     }
 
     private fun melspecOnnxPredict(floatArray: FloatArray): Array<Array<Array<FloatArray>>>? =
         runMelspecPrediction(FloatBuffer.wrap(floatArray))
 
-    private fun runMelspecPrediction(inputData: FloatBuffer?): Array<Array<Array<FloatArray>>>? {
-        return try {
-            val inputTensor = OnnxTensor.createTensor(env, inputData, longArrayOf(1, 1760))
-            try {
-                val inputs = HashMap<String, OnnxTensor>()
-                inputs["input"] = inputTensor
-                melspecOnnx.run(inputs).use { result ->
-                    (result[0] as OnnxTensor).value as Array<Array<Array<FloatArray>>>
-                }
-            } finally {
-                inputTensor.close()
+    private fun runMelspecPrediction(inputData: FloatBuffer?): Array<Array<Array<FloatArray>>>? = try {
+        val inputTensor = OnnxTensor.createTensor(env, inputData, longArrayOf(1, 1760))
+        try {
+            val inputs = HashMap<String, OnnxTensor>()
+            inputs["input"] = inputTensor
+            melspecOnnx.run(inputs).use { result ->
+                (result[0] as OnnxTensor).value as Array<Array<Array<FloatArray>>>
             }
-        } catch (e: Exception) {
-            Log.e("openWakeWord", "Melspec inference failed", e)
-            null
-        }
+        } finally { inputTensor.close() }
+    } catch (e: Exception) {
+        Log.e("openWakeWord", "Melspec inference failed", e)
+        null
     }
 
     private fun embeddingInput(data: Array<Array<Array<FloatArray>>>): ByteBuffer {
         val flattenedData = FloatArray(76 * 32)
         var index = 0
-        for (i in 0 until 76) {
-            for (j in 0 until 32) flattenedData[index++] = data[0][i][j][0]
+        for (i in 0 until 76) for (j in 0 until 32) flattenedData[index++] = data[0][i][j][0]
+        return ByteBuffer.allocateDirect(flattenedData.size * 4).order(ByteOrder.nativeOrder()).apply {
+            asFloatBuffer().put(flattenedData)
         }
-        return ByteBuffer.allocateDirect(flattenedData.size * 4)
-            .order(ByteOrder.nativeOrder())
-            .apply { asFloatBuffer().put(flattenedData) }
     }
 
     private fun embeddingModelPredict(byteBuffer: ByteBuffer): TensorBuffer {
@@ -277,12 +259,10 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
     private fun wakewordInput(data: Array<Array<FloatArray>>): ByteBuffer {
         val flattenedData = FloatArray(16 * 96)
         var index = 0
-        for (i in 0 until 16) {
-            for (j in 0 until 96) flattenedData[index++] = data[0][i][j]
+        for (i in 0 until 16) for (j in 0 until 96) flattenedData[index++] = data[0][i][j]
+        return ByteBuffer.allocateDirect(flattenedData.size * 4).order(ByteOrder.nativeOrder()).apply {
+            asFloatBuffer().put(flattenedData)
         }
-        return ByteBuffer.allocateDirect(flattenedData.size * 4)
-            .order(ByteOrder.nativeOrder())
-            .apply { asFloatBuffer().put(flattenedData) }
     }
 
     private fun wakewordModelPredict(byteBuffer: ByteBuffer): TensorBuffer {
@@ -294,42 +274,31 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
     private suspend fun getWakeWordPrediction(array: Array<Array<FloatArray>>) {
         val wakewordPrediction = wakewordModelPredict(wakewordInput(array))
         confidence = wakewordPrediction.floatArray
-        withContext(Dispatchers.Main.immediate) {
-            viewModel.updatePredictionScore(confidence)
-        }
+        withContext(Dispatchers.Main.immediate) { viewModel.updatePredictionScore(confidence) }
         addScore(confidence[0])
     }
 
     private fun verifierOnnxPredict(data: Array<Array<FloatArray>>): Float? {
         val floatArray = FloatArray(16 * 96)
         var index = 0
-        for (i in 0 until 16) {
-            for (j in 0 until 96) floatArray[index++] = data[0][i][j]
-        }
+        for (i in 0 until 16) for (j in 0 until 96) floatArray[index++] = data[0][i][j]
         return runVerifierPrediction(FloatBuffer.wrap(floatArray))
     }
 
-    private fun runVerifierPrediction(inputData: FloatBuffer?): Float? {
-        return try {
-            val inputTensor = OnnxTensor.createTensor(env, inputData, longArrayOf(1, 1536))
-            try {
-                val inputs = HashMap<String, OnnxTensor>()
-                inputs["input"] = inputTensor
-                verifierOnnx.run(inputs).use { result ->
-                    val outputSequence = result[1] as OnnxSequence
-                    try {
-                        (outputSequence.getValue()[0].value as HashMap<*, *>)[1L] as Float
-                    } finally {
-                        outputSequence.close()
-                    }
-                }
-            } finally {
-                inputTensor.close()
+    private fun runVerifierPrediction(inputData: FloatBuffer?): Float? = try {
+        val inputTensor = OnnxTensor.createTensor(env, inputData, longArrayOf(1, 1536))
+        try {
+            val inputs = HashMap<String, OnnxTensor>()
+            inputs["input"] = inputTensor
+            verifierOnnx.run(inputs).use { result ->
+                val outputSequence = result[1] as OnnxSequence
+                try { (outputSequence.getValue()[0].value as HashMap<*, *>)[1L] as Float }
+                finally { outputSequence.close() }
             }
-        } catch (e: Exception) {
-            Log.e("openWakeWord", "Verifier inference failed", e)
-            null
-        }
+        } finally { inputTensor.close() }
+    } catch (e: Exception) {
+        Log.e("openWakeWord", "Verifier inference failed", e)
+        null
     }
 
     private fun addScore(newScore: Float) {
@@ -345,9 +314,7 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
                 player.seekTo(0)
                 player.start()
             }
-        } catch (e: Exception) {
-            Log.w("ALEXA", "Ping sound failed", e)
-        }
+        } catch (e: Exception) { Log.w("ALEXA", "Ping sound failed", e) }
     }
 
     fun release() {
