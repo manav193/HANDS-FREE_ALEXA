@@ -8,7 +8,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -24,12 +23,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -64,7 +59,10 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             WakeWordDisplayImageTheme {
-                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
                     AlexaDashboard(viewModel)
                 }
             }
@@ -105,21 +103,36 @@ fun AlexaDashboard(viewModel: MainViewModel) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text("Alexa", fontSize = 42.sp, fontWeight = FontWeight.Bold)
-        Text("Hands-free voice control", fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            "Hands-free voice control",
+            fontSize = 16.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
 
         Spacer(Modifier.height(28.dp))
 
         Box(
-            modifier = Modifier.size(104.dp).scale(if (active) 1f else .96f).clip(CircleShape)
+            modifier = Modifier
+                .size(104.dp)
+                .scale(if (active) 1f else .96f)
+                .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.primaryContainer),
             contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Filled.RecordVoiceOver, contentDescription = "Listening", modifier = Modifier.size(54.dp), tint = MaterialTheme.colorScheme.primary)
+            Text("MIC", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
         }
 
         Spacer(Modifier.height(18.dp))
-        Text(if (active) "Listening for “Alexa”" else "Microphone inactive", fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
-        Text("Say Alexa to open Amazon Alexa", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            if (active) "Listening for “Alexa”" else "Microphone inactive",
+            fontSize = 21.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        Text(
+            "Say Alexa to open Amazon Alexa",
+            fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
 
         Spacer(Modifier.height(28.dp))
 
@@ -129,23 +142,40 @@ fun AlexaDashboard(viewModel: MainViewModel) {
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
         ) {
             Column(Modifier.padding(20.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.Mic, contentDescription = null, modifier = Modifier.size(20.dp))
-                        Text("  Wake-word confidence", fontWeight = FontWeight.Medium)
-                    }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Wake-word confidence", fontWeight = FontWeight.Medium)
                     Text("${(animatedScore * 100).toInt()}%", fontWeight = FontWeight.Bold)
                 }
                 Spacer(Modifier.height(12.dp))
-                Box(Modifier.fillMaxWidth().height(12.dp).clip(RoundedCornerShape(6.dp)).background(Color.Gray.copy(alpha = .25f))) {
-                    Box(Modifier.fillMaxWidth(animatedScore).fillMaxHeight().clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.primary))
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(12.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color.Gray.copy(alpha = .25f))
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth(animatedScore)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(MaterialTheme.colorScheme.primary)
+                    )
                 }
             }
         }
 
         Spacer(Modifier.height(14.dp))
         Card(shape = RoundedCornerShape(20.dp)) {
-            Row(Modifier.fillMaxWidth().padding(20.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                Modifier.fillMaxWidth().padding(20.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text("Wake words detected", fontWeight = FontWeight.Medium)
                 Text("$count", fontSize = 28.sp, fontWeight = FontWeight.Bold)
             }
