@@ -1,168 +1,165 @@
 package com.example.wakeworddisplayimage
 
 import android.Manifest
-import android.media.MediaRecorder
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.wakeworddisplayimage.ui.theme.WakeWordDisplayImageTheme
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.graphics.Color
 
 class MainActivity : ComponentActivity() {
+    private lateinit var openWakeWord: OpenWakeWord
 
-    private lateinit var mediaRecorder : MediaRecorder
-    companion object {
-        init {
-        }
-    }
     private val requestPermissionLauncher: ActivityResultLauncher<String> =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted: Boolean ->
-            if (isGranted) {
-                Toast.makeText(this, "Permission granted", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(this, "Permission is required", Toast.LENGTH_SHORT).show()
-            }
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) openWakeWord.startListeningForKeyword()
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val viewModel : MainViewModel by viewModels()
-        requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-
-        val openWakeWord = OpenWakeWord(this@MainActivity, viewModel)
-        openWakeWord.startListeningForKeyword()
+        val viewModel: MainViewModel by viewModels()
+        openWakeWord = OpenWakeWord(this, viewModel)
 
         enableEdgeToEdge()
         setContent {
             WakeWordDisplayImageTheme {
-                Column(modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally)
-                {
-                    Row {
-                        MyScore(
-                            context = this@MainActivity,
-                            viewModel = viewModel,
-                            modifier = Modifier
-                        )
-                    }
-                    Row {
-                        MyKeywordCount(
-                            context = this@MainActivity,
-                            viewModel = viewModel,
-                            modifier = Modifier
-                        )
-                    }
+                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    AlexaDashboard(viewModel)
                 }
             }
         }
+
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            openWakeWord.startListeningForKeyword()
+        } else {
+            requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    override fun onDestroy() {
+        openWakeWord.release()
+        super.onDestroy()
     }
 }
 
 @Composable
-fun MyKeywordCount(context: MainActivity, viewModel: MainViewModel, modifier: Modifier) {
-    var keywordCount by remember {
-        mutableIntStateOf(0)
-    }
-    viewModel.wakewordCount.observe(context) {
-        keywordCount = it
-    }
-    Column {
-        Text(
-            text = "Keyword count",
-            fontSize = 30.sp,
-            modifier = modifier
-                .padding(horizontal = 8.dp))
-        Text(
-            text = "$keywordCount",
-            fontSize = 60.sp,
-            modifier = modifier
-                .padding(horizontal = 8.dp)
-                .align(alignment = Alignment.CenterHorizontally)
-        )
-    }
-}
+fun AlexaDashboard(viewModel: MainViewModel) {
+    var score by remember { mutableStateOf(0f) }
+    var count by remember { mutableStateOf(0) }
+    var active by remember { mutableStateOf(true) }
 
-@Composable
-fun MyScore(context: MainActivity, viewModel: MainViewModel, modifier: Modifier) {
-    var predictionScores by remember {
-        mutableStateOf<FloatArray?>(null)
+    viewModel.predictionScores.observeAsStateCompat()?.let { scores ->
+        if (scores.isNotEmpty()) score = scores[0].coerceIn(0f, 1f)
     }
-    viewModel.predictionScores.observe(context) {
-        predictionScores = it
+    viewModel.wakewordCount.observeAsStateCompat()?.let {
+        count = it
+        active = true
     }
-    if (predictionScores != null) {
-        Column {
-            for (score in predictionScores!!) {
-                PredictionBar(
-                    score = score
-                )
-                Text(
-                    text = "Prediction score: $score",
-                    modifier = modifier.padding(horizontal = 8.dp)
-                )
+
+    val animatedScore by animateFloatAsState(score, label = "score")
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 30.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text("Alexa", fontSize = 42.sp, fontWeight = FontWeight.Bold)
+        Text("Hands-free voice control", fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+        Spacer(Modifier.height(28.dp))
+
+        Box(
+            modifier = Modifier.size(104.dp).scale(if (active) 1f else .96f).clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(Icons.Filled.RecordVoiceOver, contentDescription = "Listening", modifier = Modifier.size(54.dp), tint = MaterialTheme.colorScheme.primary)
+        }
+
+        Spacer(Modifier.height(18.dp))
+        Text(if (active) "Listening for “Alexa”" else "Microphone inactive", fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
+        Text("Say Alexa to open Amazon Alexa", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+        Spacer(Modifier.height(28.dp))
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(Modifier.padding(20.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.Mic, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Text("  Wake-word confidence", fontWeight = FontWeight.Medium)
+                    }
+                    Text("${(animatedScore * 100).toInt()}%", fontWeight = FontWeight.Bold)
+                }
+                Spacer(Modifier.height(12.dp))
+                Box(Modifier.fillMaxWidth().height(12.dp).clip(RoundedCornerShape(6.dp)).background(Color.Gray.copy(alpha = .25f))) {
+                    Box(Modifier.fillMaxWidth(animatedScore).fillMaxHeight().clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.primary))
+                }
+            }
+        }
+
+        Spacer(Modifier.height(14.dp))
+        Card(shape = RoundedCornerShape(20.dp)) {
+            Row(Modifier.fillMaxWidth().padding(20.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Wake words detected", fontWeight = FontWeight.Medium)
+                Text("$count", fontSize = 28.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
 }
 
 @Composable
-fun PredictionBar(score: Float) {
-    // Ensure score is within [0, 1]
-    val normalizedScore = score.coerceIn(0f, 1f)
-    val percentage = (normalizedScore * 100).toInt() // Calculate percentage
-
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Text(
-            text = "$percentage%",
-            fontSize = 20.sp,
-            color = Color.Black,
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
-
-        // Background bar
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(0.8f) // Control bar width
-                .height(24.dp)
-                .background(Color.Gray, shape = RoundedCornerShape(12.dp))
-        ) {
-            // Foreground progress based on score
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(normalizedScore) // Set width based on score
-                    .fillMaxHeight()
-                    .background(Color.Blue, shape = RoundedCornerShape(12.dp))
-            )
-        }
+private fun <T> androidx.lifecycle.LiveData<T>.observeAsStateCompat(): T? {
+    var value by remember { mutableStateOf<T?>(this.value) }
+    androidx.compose.runtime.DisposableEffect(this) {
+        val observer = androidx.lifecycle.Observer<T> { value = it }
+        observeForever(observer)
+        onDispose { removeObserver(observer) }
     }
+    return value
 }
