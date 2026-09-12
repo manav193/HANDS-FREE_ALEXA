@@ -38,6 +38,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var mediaRecorder : MediaRecorder
     companion object {
         init {
+            System.loadLibrary("native-lib")
         }
     }
     private val requestPermissionLauncher: ActivityResultLauncher<String> =

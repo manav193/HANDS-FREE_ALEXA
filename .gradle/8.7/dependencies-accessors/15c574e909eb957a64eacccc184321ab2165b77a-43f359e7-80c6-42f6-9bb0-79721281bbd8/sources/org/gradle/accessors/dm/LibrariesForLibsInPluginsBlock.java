@@ -1043,7 +1043,7 @@ public class LibrariesForLibsInPluginsBlock extends AbstractExternalDependencyFa
         public Provider<String> getNavigationCompose() { return getVersion("navigationCompose"); }
 
         /**
-         * Version alias <b>onnxruntime</b> with value <b>1.17.1</b>
+         * Version alias <b>onnxruntime</b> with value <b>1.20.0</b>
          * <p>
          * If the version is a rich version and cannot be represented as a
          * single version string, an empty string is returned.
