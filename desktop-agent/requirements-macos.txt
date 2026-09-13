@@ -1,0 +1,11 @@
+# Core LAN transport
+websockets>=12,<16
+
+# Cross-platform GUI automation
+pyautogui>=0.9.54
+
+# macOS accessibility / GUI integration
+pyobjc-core>=9.2
+pyobjc>=9.2
+pyobjc-framework-Quartz>=9.2
+pyobjc-framework-ApplicationServices>=9.2
