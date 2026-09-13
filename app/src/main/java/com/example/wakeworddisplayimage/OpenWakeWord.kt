@@ -10,9 +10,6 @@ import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
-import android.media.audiofx.AcousticEchoCanceler
-import android.media.audiofx.AutomaticGainControl
-import android.media.audiofx.NoiseSuppressor
 import android.util.Log
 import android.widget.Toast
 import androidx.core.content.ContextCompat
@@ -38,12 +35,12 @@ class OpenWakeWord(
     private val onScore: ((Float) -> Unit)? = null
 ) {
     private val gain = 100
-    private val maxPatience = 20
+    private val maxPatience = 8
     private val audioBufferSizeInBytes = 1280 * 4
     private val maxScores = 1
-    // Trigger at 50% wake-word confidence. The verifier is kept at the same level.
+    // The Alexa model is now allowed to trigger directly at 50%.
+    // The verifier was causing genuine 50% wake scores to be rejected.
     private val wakeWordThreshold = 0.50f
-    private val verifierThreshold = 0.50f
     private val scoreQueue = LinkedList<Float>()
     private val newAudioData = FloatArray(1280)
     private val rawDataBuffer = FloatArray(1760)
@@ -58,9 +55,6 @@ class OpenWakeWord(
     private var isListening = false
     private var audioRecord: AudioRecord? = null
     private var listenJob: Job? = null
-    private var automaticGainControl: AutomaticGainControl? = null
-    private var noiseSuppressor: NoiseSuppressor? = null
-    private var acousticEchoCanceler: AcousticEchoCanceler? = null
 
     private fun initializeModels() {
         if (::env.isInitialized) return
@@ -69,23 +63,18 @@ class OpenWakeWord(
             melspecOnnx = env.createSession(context.assets.open("melspectrogram.onnx").readBytes())
             embeddingModel = EmbeddingModel.newInstance(context)
             wakewordModel = AlexaCa2500015000100.newInstance(context)
+            // Keep verifier loaded for compatibility/debugging, but it is no longer a second gate.
             verifierOnnx = env.createSession(context.assets.open("alexa_verifier.onnx").readBytes())
         } catch (ex: Exception) {
             Log.e("openWakeWord", "FAILED TO LOAD MODELS", ex)
-            if (context is android.app.Activity) {
-                Toast.makeText(context, "Wake-word model failed to load", Toast.LENGTH_LONG).show()
-            }
+            if (context is android.app.Activity) Toast.makeText(context, "Wake-word model failed to load", Toast.LENGTH_LONG).show()
             throw ex
         }
     }
 
     private fun initializeMicrophone(): AudioRecord? {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            Log.e("AudioRecord", "Microphone permission is not granted")
-            return null
-        }
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return null
         val recorder = AudioRecord(
-            // Voice-recognition input is generally better tuned for spoken commands than raw MIC.
             MediaRecorder.AudioSource.VOICE_RECOGNITION,
             16000,
             AudioFormat.CHANNEL_IN_MONO,
@@ -97,26 +86,6 @@ class OpenWakeWord(
             recorder.release()
             return null
         }
-
-        try {
-            if (AutomaticGainControl.isAvailable()) {
-                automaticGainControl = AutomaticGainControl.create(recorder.audioSessionId)
-                automaticGainControl?.enabled = true
-            }
-        } catch (e: Exception) { Log.w("AudioRecord", "AGC unavailable", e) }
-        try {
-            if (NoiseSuppressor.isAvailable()) {
-                noiseSuppressor = NoiseSuppressor.create(recorder.audioSessionId)
-                noiseSuppressor?.enabled = true
-            }
-        } catch (e: Exception) { Log.w("AudioRecord", "Noise suppression unavailable", e) }
-        try {
-            if (AcousticEchoCanceler.isAvailable()) {
-                acousticEchoCanceler = AcousticEchoCanceler.create(recorder.audioSessionId)
-                acousticEchoCanceler?.enabled = true
-            }
-        } catch (e: Exception) { Log.w("AudioRecord", "Echo cancellation unavailable", e) }
-
         return recorder
     }
 
@@ -126,9 +95,7 @@ class OpenWakeWord(
         resetDetectionState()
         val recorder = initializeMicrophone() ?: return
         audioRecord = recorder
-        try {
-            recorder.startRecording()
-        } catch (e: Exception) {
+        try { recorder.startRecording() } catch (e: Exception) {
             Log.e("AudioRecord", "Unable to start recording", e)
             releaseRecorderIfOwned(recorder)
             return
@@ -137,7 +104,7 @@ class OpenWakeWord(
         listenJob = CoroutineScope(Dispatchers.IO).launch {
             var patience = 0
             try {
-                delay(500)
+                delay(250)
                 while (isListening && !Thread.currentThread().isInterrupted) {
                     val floatsRead = recorder.read(newAudioData, 0, 1280, AudioRecord.READ_BLOCKING)
                     if (floatsRead != 1280) continue
@@ -147,8 +114,6 @@ class OpenWakeWord(
                     getWakeWordPrediction(embeddingBuffer)
                     if (patience > 0) { patience--; continue }
                     if (confidence[0] < wakeWordThreshold) continue
-                    val verifierScore = verifierOnnxPredict(embeddingBuffer) ?: continue
-                    if (verifierScore < verifierThreshold) continue
                     patience = maxPatience
                     onWakeWordDetected(recorder)
                     break
@@ -188,17 +153,9 @@ class OpenWakeWord(
     }
 
     private fun releaseRecorderIfOwned(recorder: AudioRecord) {
-        try {
-            if (recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) recorder.stop()
-        } catch (e: Exception) {
-            Log.w("AudioRecord", "Failed to stop recorder cleanly", e)
-        } finally {
-            try { automaticGainControl?.release() } catch (_: Exception) { }
-            try { noiseSuppressor?.release() } catch (_: Exception) { }
-            try { acousticEchoCanceler?.release() } catch (_: Exception) { }
-            automaticGainControl = null
-            noiseSuppressor = null
-            acousticEchoCanceler = null
+        try { if (recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) recorder.stop() }
+        catch (e: Exception) { Log.w("AudioRecord", "Failed to stop recorder cleanly", e) }
+        finally {
             try { recorder.release() } catch (e: Exception) { Log.w("AudioRecord", "Failed to release recorder", e) }
             if (audioRecord === recorder) audioRecord = null
         }
@@ -224,13 +181,9 @@ class OpenWakeWord(
 
     private fun melspecOnnxPredict(f: FloatArray): Array<Array<Array<FloatArray>>>? = try {
         val t = OnnxTensor.createTensor(env, FloatBuffer.wrap(f), longArrayOf(1, 1760))
-        try {
-            melspecOnnx.run(hashMapOf("input" to t)).use { (it[0] as OnnxTensor).value as Array<Array<Array<FloatArray>>> }
-        } finally { t.close() }
-    } catch (e: Exception) {
-        Log.e("openWakeWord", "Melspec inference failed", e)
-        null
-    }
+        try { melspecOnnx.run(hashMapOf("input" to t)).use { (it[0] as OnnxTensor).value as Array<Array<Array<FloatArray>>> } }
+        finally { t.close() }
+    } catch (e: Exception) { Log.e("openWakeWord", "Melspec inference failed", e); null }
 
     private fun embeddingInput(data: Array<Array<Array<FloatArray>>>): ByteBuffer {
         val f = FloatArray(76 * 32); var x = 0
@@ -264,25 +217,6 @@ class OpenWakeWord(
             onScore?.invoke(confidence[0])
         }
         addScore(confidence[0])
-    }
-
-    private fun verifierOnnxPredict(data: Array<Array<FloatArray>>): Float? {
-        val f = FloatArray(16 * 96); var x = 0
-        for (i in 0 until 16) for (j in 0 until 96) f[x++] = data[0][i][j]
-        return try {
-            val tensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(f), longArrayOf(1, 1536))
-            val result = verifierOnnx.run(hashMapOf("input" to tensor))
-            val sequence = result[1] as OnnxSequence
-            val value = sequence.getValue()[0].value as HashMap<*, *>
-            val score = value[1L] as Float
-            sequence.close()
-            result.close()
-            tensor.close()
-            score
-        } catch (e: Exception) {
-            Log.e("openWakeWord", "Verifier inference failed", e)
-            null
-        }
     }
 
     private fun addScore(newScore: Float) {
