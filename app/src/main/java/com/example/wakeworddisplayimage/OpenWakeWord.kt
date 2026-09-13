@@ -38,6 +38,10 @@ class OpenWakeWord(
     private val maxPatience = 20
     private val audioBufferSizeInBytes = 1280 * 4
     private val maxScores = 1
+    // Slightly more sensitive so natural variants such as "Alex" / "Lexa" can be caught by the Alexa model.
+    // These are acoustic aliases, not separate trained wake-word models.
+    private val wakeWordThreshold = 0.28f
+    private val verifierThreshold = 0.28f
     private val scoreQueue = LinkedList<Float>()
     private val newAudioData = FloatArray(1280)
     private val rawDataBuffer = FloatArray(1760)
@@ -116,9 +120,9 @@ class OpenWakeWord(
                     bufferEmbeddings()
                     getWakeWordPrediction(embeddingBuffer)
                     if (patience > 0) { patience--; continue }
-                    if (confidence[0] <= 0.35f) continue
+                    if (confidence[0] <= wakeWordThreshold) continue
                     val verifierScore = verifierOnnxPredict(embeddingBuffer) ?: continue
-                    if (verifierScore <= 0.35f) continue
+                    if (verifierScore <= verifierThreshold) continue
                     patience = maxPatience
                     onWakeWordDetected(recorder)
                     break
