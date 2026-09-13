@@ -26,25 +26,14 @@ class WakeWordService : Service() {
         notificationManager = getSystemService(NotificationManager::class.java)
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification(0))
-
-        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-            startDetector()
-        } else {
-            Log.e(TAG, "RECORD_AUDIO permission is not granted")
-            broadcastStatus(0f)
-        }
+        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) startDetector()
+        else broadcastStatus(0f)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_RESUME -> {
-                waitingForAlexa = false
-                startDetector()
-            }
-            ACTION_STOP -> {
-                stopDetector()
-                stopSelf()
-            }
+            ACTION_RESUME -> { waitingForAlexa = false; startDetector() }
+            ACTION_STOP -> { stopDetector(); stopSelf() }
             else -> if (!waitingForAlexa) startDetector()
         }
         return START_STICKY
@@ -53,12 +42,7 @@ class WakeWordService : Service() {
     private fun startDetector() {
         if (waitingForAlexa) return
         if (engine == null) {
-            engine = OpenWakeWord(
-                this,
-                null,
-                { handleWakeWord() },
-                { score -> broadcastStatus(score) }
-            )
+            engine = OpenWakeWord(this, null, { handleWakeWord() }, { score -> broadcastStatus(score) })
         }
         engine?.startListeningForKeyword()
     }
@@ -69,21 +53,33 @@ class WakeWordService : Service() {
         broadcastWakeWord()
         engine?.stopListening()
 
-        // Let AudioRecord fully release the microphone before Alexa starts listening.
+        // Do NOT open our own Activity. Android 10 permits this direct background
+        // launch when SYSTEM_ALERT_WINDOW is granted. The detector is restarted
+        // after Alexa returns/finishes, without briefly showing our dashboard.
         mainHandler.postDelayed({
-            if (!waitingForAlexa) return@postDelayed
             try {
-                val intent = Intent(this, AlexaBridgeActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                val intent = Intent().apply {
+                    component = android.content.ComponentName(
+                        "com.amazon.dee.app",
+                        "com.amazon.alexa.voice.VoiceHandsFreeSearchActivity"
+                    )
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 }
                 startActivity(intent)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to launch Alexa bridge", e)
-                broadcastStatus(0f)
+                Log.e(TAG, "Failed to launch Alexa", e)
                 waitingForAlexa = false
                 startDetector()
             }
-        }, 350L)
+        }, 300L)
+
+        // VoiceHandsFreeSearchActivity normally ends after handling the request.
+        // Re-arm the detector after a short safety window so the next wake word
+        // does not get lost even when Alexa returns without notifying us.
+        mainHandler.postDelayed({
+            waitingForAlexa = false
+            startDetector()
+        }, 7000L)
     }
 
     private fun broadcastStatus(score: Float) {
@@ -96,8 +92,8 @@ class WakeWordService : Service() {
         sendBroadcast(Intent(ACTION_SCORE).setPackage(packageName).putExtra(EXTRA_SCORE, safeScore))
     }
 
-    private fun buildNotification(percent: Int): Notification {
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+    private fun buildNotification(percent: Int): Notification =
+        NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentTitle("Alexa hands-free active")
             .setContentText("Wake-word confidence: $percent% • trigger: 50%")
@@ -107,11 +103,8 @@ class WakeWordService : Service() {
             .setShowWhen(false)
             .setCategory(Notification.CATEGORY_SERVICE)
             .build()
-    }
 
-    private fun broadcastWakeWord() {
-        sendBroadcast(Intent(ACTION_COUNT).setPackage(packageName))
-    }
+    private fun broadcastWakeWord() { sendBroadcast(Intent(ACTION_COUNT).setPackage(packageName)) }
 
     private fun stopDetector() {
         mainHandler.removeCallbacksAndMessages(null)
@@ -119,23 +112,14 @@ class WakeWordService : Service() {
         engine = null
     }
 
-    override fun onDestroy() {
-        stopDetector()
-        super.onDestroy()
-    }
-
+    override fun onDestroy() { stopDetector(); super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Alexa hands-free",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Keeps the wake-word detector active while the tablet is on the home screen."
-            }
-            notificationManager.createNotificationChannel(channel)
+            notificationManager.createNotificationChannel(NotificationChannel(
+                CHANNEL_ID, "Alexa hands-free", NotificationManager.IMPORTANCE_LOW
+            ).apply { description = "Keeps the wake-word detector active while the tablet is on the home screen." })
         }
     }
 
