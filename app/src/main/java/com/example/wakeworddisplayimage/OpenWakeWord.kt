@@ -10,6 +10,9 @@ import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AutomaticGainControl
+import android.media.audiofx.NoiseSuppressor
 import android.util.Log
 import android.widget.Toast
 import androidx.core.content.ContextCompat
@@ -38,10 +41,9 @@ class OpenWakeWord(
     private val maxPatience = 20
     private val audioBufferSizeInBytes = 1280 * 4
     private val maxScores = 1
-    // Slightly more sensitive so natural variants such as "Alex" / "Lexa" can be caught by the Alexa model.
-    // These are acoustic aliases, not separate trained wake-word models.
-    private val wakeWordThreshold = 0.28f
-    private val verifierThreshold = 0.28f
+    // Trigger at 50% wake-word confidence. The verifier is kept at the same level.
+    private val wakeWordThreshold = 0.50f
+    private val verifierThreshold = 0.50f
     private val scoreQueue = LinkedList<Float>()
     private val newAudioData = FloatArray(1280)
     private val rawDataBuffer = FloatArray(1760)
@@ -56,6 +58,9 @@ class OpenWakeWord(
     private var isListening = false
     private var audioRecord: AudioRecord? = null
     private var listenJob: Job? = null
+    private var automaticGainControl: AutomaticGainControl? = null
+    private var noiseSuppressor: NoiseSuppressor? = null
+    private var acousticEchoCanceler: AcousticEchoCanceler? = null
 
     private fun initializeModels() {
         if (::env.isInitialized) return
@@ -80,7 +85,8 @@ class OpenWakeWord(
             return null
         }
         val recorder = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
+            // Voice-recognition input is generally better tuned for spoken commands than raw MIC.
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
             16000,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_FLOAT,
@@ -91,6 +97,26 @@ class OpenWakeWord(
             recorder.release()
             return null
         }
+
+        try {
+            if (AutomaticGainControl.isAvailable()) {
+                automaticGainControl = AutomaticGainControl.create(recorder.audioSessionId)
+                automaticGainControl?.enabled = true
+            }
+        } catch (e: Exception) { Log.w("AudioRecord", "AGC unavailable", e) }
+        try {
+            if (NoiseSuppressor.isAvailable()) {
+                noiseSuppressor = NoiseSuppressor.create(recorder.audioSessionId)
+                noiseSuppressor?.enabled = true
+            }
+        } catch (e: Exception) { Log.w("AudioRecord", "Noise suppression unavailable", e) }
+        try {
+            if (AcousticEchoCanceler.isAvailable()) {
+                acousticEchoCanceler = AcousticEchoCanceler.create(recorder.audioSessionId)
+                acousticEchoCanceler?.enabled = true
+            }
+        } catch (e: Exception) { Log.w("AudioRecord", "Echo cancellation unavailable", e) }
+
         return recorder
     }
 
@@ -111,7 +137,7 @@ class OpenWakeWord(
         listenJob = CoroutineScope(Dispatchers.IO).launch {
             var patience = 0
             try {
-                delay(1200)
+                delay(500)
                 while (isListening && !Thread.currentThread().isInterrupted) {
                     val floatsRead = recorder.read(newAudioData, 0, 1280, AudioRecord.READ_BLOCKING)
                     if (floatsRead != 1280) continue
@@ -120,9 +146,9 @@ class OpenWakeWord(
                     bufferEmbeddings()
                     getWakeWordPrediction(embeddingBuffer)
                     if (patience > 0) { patience--; continue }
-                    if (confidence[0] <= wakeWordThreshold) continue
+                    if (confidence[0] < wakeWordThreshold) continue
                     val verifierScore = verifierOnnxPredict(embeddingBuffer) ?: continue
-                    if (verifierScore <= verifierThreshold) continue
+                    if (verifierScore < verifierThreshold) continue
                     patience = maxPatience
                     onWakeWordDetected(recorder)
                     break
@@ -167,6 +193,12 @@ class OpenWakeWord(
         } catch (e: Exception) {
             Log.w("AudioRecord", "Failed to stop recorder cleanly", e)
         } finally {
+            try { automaticGainControl?.release() } catch (_: Exception) { }
+            try { noiseSuppressor?.release() } catch (_: Exception) { }
+            try { acousticEchoCanceler?.release() } catch (_: Exception) { }
+            automaticGainControl = null
+            noiseSuppressor = null
+            acousticEchoCanceler = null
             try { recorder.release() } catch (e: Exception) { Log.w("AudioRecord", "Failed to release recorder", e) }
             if (audioRecord === recorder) audioRecord = null
         }
