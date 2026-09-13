@@ -32,7 +32,6 @@ import java.nio.FloatBuffer
 import java.util.LinkedList
 
 class OpenWakeWord(private val context: MainActivity, private val viewModel: MainViewModel) {
-
     private val gain = 100
     private val maxPatience = 20
     private val audioBufferSizeInBytes = 1280 * 4
@@ -150,17 +149,18 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
     }
 
     private suspend fun onWakeWordDetected(recorder: AudioRecord) {
-        // Critical: release our microphone BEFORE launching Alexa.
-        // Otherwise Alexa and this detector can fight for the same MIC and the UI may appear frozen.
+        // Release the microphone completely before Alexa starts.
         isListening = false
         if (audioRecord === recorder) {
             releaseRecorderIfOwned(recorder)
             audioRecord = null
         }
 
+        // Do not play our own audio here. Alexa needs immediate exclusive access
+        // to the device audio path and some Android 10 firmware can stall when
+        // MediaPlayer and Alexa are started at the same time.
         withContext(Dispatchers.Main.immediate) {
             viewModel.addCount()
-            playSound()
             launchAlexa()
         }
     }
@@ -305,16 +305,6 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
         if (scoreQueue.size == maxScores) scoreQueue.pollFirst()
         scoreQueue.add(newScore)
         averagedConfidence = scoreQueue.average().toFloat()
-    }
-
-    private fun playSound() {
-        try {
-            mediaPlayer?.let { player ->
-                if (player.isPlaying) player.pause()
-                player.seekTo(0)
-                player.start()
-            }
-        } catch (e: Exception) { Log.w("ALEXA", "Ping sound failed", e) }
     }
 
     fun release() {
