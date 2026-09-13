@@ -1,6 +1,7 @@
 package com.example.wakeworddisplayimage
 
 import android.Manifest
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -10,29 +11,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -45,47 +28,57 @@ import com.example.wakeworddisplayimage.ui.theme.WakeWordDisplayImageTheme
 
 class MainActivity : ComponentActivity() {
     private lateinit var openWakeWord: OpenWakeWord
-    private var alexaHandoff = false
+    private var waitingForAlexa = false
 
     private val requestPermissionLauncher: ActivityResultLauncher<String> =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            if (granted) openWakeWord.startListeningForKeyword()
+            if (granted && !waitingForAlexa) openWakeWord.startListeningForKeyword()
+        }
+
+    private val alexaLauncher: ActivityResultLauncher<Intent> =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            if (waitingForAlexa) {
+                waitingForAlexa = false
+                openWakeWord.resetDetectionState()
+                startListenerIfPermitted()
+            }
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val viewModel: MainViewModel by viewModels()
         openWakeWord = OpenWakeWord(this, viewModel)
-
         enableEdgeToEdge()
         setContent {
             WakeWordDisplayImageTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     AlexaDashboard(viewModel)
                 }
             }
         }
-
         startListenerIfPermitted()
     }
 
-    override fun onResume() {
-        super.onResume()
-        if (alexaHandoff) {
-            alexaHandoff = false
+    fun launchAlexaActivity() {
+        if (waitingForAlexa) return
+        try {
+            waitingForAlexa = true
+            alexaLauncher.launch(Intent().apply {
+                component = android.content.ComponentName(
+                    "com.amazon.dee.app",
+                    "com.amazon.alexa.voice.VoiceHandsFreeSearchActivity"
+                )
+            })
+        } catch (e: Exception) {
+            waitingForAlexa = false
+            android.util.Log.e("ALEXA", "Failed to launch Alexa", e)
+            android.widget.Toast.makeText(this, "Unable to open Alexa", android.widget.Toast.LENGTH_SHORT).show()
             startListenerIfPermitted()
         }
     }
 
-    fun markAlexaHandoff() {
-        alexaHandoff = true
-    }
-
     private fun startListenerIfPermitted() {
-        if (!::openWakeWord.isInitialized) return
+        if (!::openWakeWord.isInitialized || waitingForAlexa) return
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
             openWakeWord.startListeningForKeyword()
         } else {
@@ -104,43 +97,23 @@ fun AlexaDashboard(viewModel: MainViewModel) {
     var score by remember { mutableStateOf(0f) }
     var count by remember { mutableStateOf(0) }
     var active by remember { mutableStateOf(true) }
-
-    viewModel.predictionScores.observeAsStateCompat()?.let { scores ->
-        if (scores.isNotEmpty()) score = scores[0].coerceIn(0f, 1f)
-    }
-    viewModel.wakewordCount.observeAsStateCompat()?.let {
-        count = it
-        active = true
-    }
-
+    viewModel.predictionScores.observeAsStateCompat()?.let { if (it.isNotEmpty()) score = it[0].coerceIn(0f, 1f) }
+    viewModel.wakewordCount.observeAsStateCompat()?.let { count = it; active = true }
     val animatedScore by animateFloatAsState(score, label = "score")
-
-    Column(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 30.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 30.dp), Arrangement.Center, Alignment.CenterHorizontally) {
         Text("Alexa", fontSize = 42.sp, fontWeight = FontWeight.Bold)
         Text("Hands-free voice control", fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(28.dp))
-        Box(
-            modifier = Modifier.size(104.dp).scale(if (active) 1f else .96f).clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center
-        ) {
+        Box(Modifier.size(104.dp).scale(if (active) 1f else .96f).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer), Alignment.Center) {
             Text("MIC", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
         }
         Spacer(Modifier.height(18.dp))
         Text(if (active) "Listening for “Alexa”" else "Microphone inactive", fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
         Text("Say Alexa to open Amazon Alexa", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(28.dp))
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-        ) {
+        Card(Modifier.fillMaxWidth(), RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
             Column(Modifier.padding(20.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                     Text("Wake-word confidence", fontWeight = FontWeight.Medium)
                     Text("${(animatedScore * 100).toInt()}%", fontWeight = FontWeight.Bold)
                 }
@@ -152,7 +125,7 @@ fun AlexaDashboard(viewModel: MainViewModel) {
         }
         Spacer(Modifier.height(14.dp))
         Card(shape = RoundedCornerShape(20.dp)) {
-            Row(Modifier.fillMaxWidth().padding(20.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(20.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                 Text("Wake words detected", fontWeight = FontWeight.Medium)
                 Text("$count", fontSize = 28.sp, fontWeight = FontWeight.Bold)
             }
