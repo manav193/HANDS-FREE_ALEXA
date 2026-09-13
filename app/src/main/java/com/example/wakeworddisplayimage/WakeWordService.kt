@@ -39,6 +39,9 @@ class WakeWordService : Service() {
 
         if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             startDetector()
+        } else {
+            Log.e(TAG, "RECORD_AUDIO permission is not granted")
+            broadcastStatus(0f)
         }
     }
 
@@ -60,9 +63,12 @@ class WakeWordService : Service() {
     private fun startDetector() {
         if (waitingForAlexa) return
         if (engine == null) {
-            engine = OpenWakeWord(this, null) {
-                handleWakeWord()
-            }
+            engine = OpenWakeWord(
+                this,
+                null,
+                { handleWakeWord() },
+                { score -> broadcastStatus(score) }
+            )
         }
         engine?.startListeningForKeyword()
     }
@@ -70,6 +76,7 @@ class WakeWordService : Service() {
     private fun handleWakeWord() {
         if (waitingForAlexa) return
         waitingForAlexa = true
+        broadcastWakeWord()
         engine?.stopListening()
         try {
             val intent = Intent().apply {
@@ -81,10 +88,19 @@ class WakeWordService : Service() {
             }
             startActivity(intent)
         } catch (e: Exception) {
-            Log.e("ALEXA", "Failed to launch Alexa from service", e)
+            Log.e(TAG, "Failed to launch Alexa from service", e)
+            broadcastStatus(0f)
             waitingForAlexa = false
             startDetector()
         }
+    }
+
+    private fun broadcastStatus(score: Float) {
+        sendBroadcast(Intent(ACTION_SCORE).setPackage(packageName).putExtra(EXTRA_SCORE, score))
+    }
+
+    private fun broadcastWakeWord() {
+        sendBroadcast(Intent(ACTION_COUNT).setPackage(packageName))
     }
 
     private fun stopDetector() {
@@ -115,7 +131,11 @@ class WakeWordService : Service() {
     companion object {
         const val ACTION_RESUME = "com.example.wakeworddisplayimage.RESUME"
         const val ACTION_STOP = "com.example.wakeworddisplayimage.STOP"
+        const val ACTION_SCORE = "com.example.wakeworddisplayimage.SCORE"
+        const val ACTION_COUNT = "com.example.wakeworddisplayimage.COUNT"
+        const val EXTRA_SCORE = "score"
         private const val CHANNEL_ID = "alexa_hands_free"
         private const val NOTIFICATION_ID = 401
+        private const val TAG = "WakeWordService"
     }
 }
