@@ -7,7 +7,9 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -16,6 +18,8 @@ class WakeWordService : Service() {
     private var engine: OpenWakeWord? = null
     private var waitingForAlexa = false
     private lateinit var notificationManager: NotificationManager
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var lastNotificationPercent = -1
 
     override fun onCreate() {
         super.onCreate()
@@ -64,27 +68,31 @@ class WakeWordService : Service() {
         waitingForAlexa = true
         broadcastWakeWord()
         engine?.stopListening()
-        try {
-            val intent = Intent().apply {
-                component = android.content.ComponentName(
-                    "com.amazon.dee.app",
-                    "com.amazon.alexa.voice.VoiceHandsFreeSearchActivity"
-                )
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+        // Let AudioRecord fully release the microphone before Alexa starts listening.
+        mainHandler.postDelayed({
+            if (!waitingForAlexa) return@postDelayed
+            try {
+                val intent = Intent(this, AlexaBridgeActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(intent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to launch Alexa bridge", e)
+                broadcastStatus(0f)
+                waitingForAlexa = false
+                startDetector()
             }
-            startActivity(intent)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to launch Alexa from service", e)
-            broadcastStatus(0f)
-            waitingForAlexa = false
-            startDetector()
-        }
+        }, 350L)
     }
 
     private fun broadcastStatus(score: Float) {
         val safeScore = score.coerceIn(0f, 1f)
         val percent = (safeScore * 100f).toInt()
-        notificationManager.notify(NOTIFICATION_ID, buildNotification(percent))
+        if (percent != lastNotificationPercent) {
+            lastNotificationPercent = percent
+            notificationManager.notify(NOTIFICATION_ID, buildNotification(percent))
+        }
         sendBroadcast(Intent(ACTION_SCORE).setPackage(packageName).putExtra(EXTRA_SCORE, safeScore))
     }
 
@@ -92,9 +100,11 @@ class WakeWordService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentTitle("Alexa hands-free active")
-            .setContentText("Wake-word confidence: $percent% • Alexa / Alex / Lexa")
-            .setProgress(100, percent, false)
+            .setContentText("Wake-word confidence: $percent% • trigger: 50%")
+            .setProgress(100, percent.coerceIn(0, 100), false)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setShowWhen(false)
             .setCategory(Notification.CATEGORY_SERVICE)
             .build()
     }
@@ -104,6 +114,7 @@ class WakeWordService : Service() {
     }
 
     private fun stopDetector() {
+        mainHandler.removeCallbacksAndMessages(null)
         engine?.release()
         engine = null
     }
