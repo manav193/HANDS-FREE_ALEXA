@@ -35,6 +35,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.background
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
@@ -45,6 +46,7 @@ import com.example.wakeworddisplayimage.ui.theme.WakeWordDisplayImageTheme
 
 class MainActivity : ComponentActivity() {
     private lateinit var openWakeWord: OpenWakeWord
+    private var alexaHandoff = false
 
     private val requestPermissionLauncher: ActivityResultLauncher<String> =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -68,6 +70,25 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        startListenerIfPermitted()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Do not restart while the Alexa activity is on top.
+        // Restart only when control returns to this activity.
+        if (alexaHandoff) {
+            alexaHandoff = false
+            startListenerIfPermitted()
+        }
+    }
+
+    fun markAlexaHandoff() {
+        alexaHandoff = true
+    }
+
+    private fun startListenerIfPermitted() {
+        if (!::openWakeWord.isInitialized) return
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
             openWakeWord.startListeningForKeyword()
         } else {
@@ -76,7 +97,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        openWakeWord.release()
+        if (::openWakeWord.isInitialized) openWakeWord.release()
         super.onDestroy()
     }
 }
@@ -103,79 +124,38 @@ fun AlexaDashboard(viewModel: MainViewModel) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text("Alexa", fontSize = 42.sp, fontWeight = FontWeight.Bold)
-        Text(
-            "Hands-free voice control",
-            fontSize = 16.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
+        Text("Hands-free voice control", fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(28.dp))
-
         Box(
-            modifier = Modifier
-                .size(104.dp)
-                .scale(if (active) 1f else .96f)
-                .clip(CircleShape)
+            modifier = Modifier.size(104.dp).scale(if (active) 1f else .96f).clip(CircleShape)
                 .background(MaterialTheme.colorScheme.primaryContainer),
             contentAlignment = Alignment.Center
         ) {
             Text("MIC", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
         }
-
         Spacer(Modifier.height(18.dp))
-        Text(
-            if (active) "Listening for “Alexa”" else "Microphone inactive",
-            fontSize = 21.sp,
-            fontWeight = FontWeight.SemiBold
-        )
-        Text(
-            "Say Alexa to open Amazon Alexa",
-            fontSize = 14.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
+        Text(if (active) "Listening for “Alexa”" else "Microphone inactive", fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
+        Text("Say Alexa to open Amazon Alexa", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(28.dp))
-
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(20.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
         ) {
             Column(Modifier.padding(20.dp)) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text("Wake-word confidence", fontWeight = FontWeight.Medium)
                     Text("${(animatedScore * 100).toInt()}%", fontWeight = FontWeight.Bold)
                 }
                 Spacer(Modifier.height(12.dp))
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(12.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(Color.Gray.copy(alpha = .25f))
-                ) {
-                    Box(
-                        Modifier
-                            .fillMaxWidth(animatedScore)
-                            .fillMaxHeight()
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(MaterialTheme.colorScheme.primary)
-                    )
+                Box(Modifier.fillMaxWidth().height(12.dp).clip(RoundedCornerShape(6.dp)).background(Color.Gray.copy(alpha = .25f))) {
+                    Box(Modifier.fillMaxWidth(animatedScore).fillMaxHeight().clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.primary))
                 }
             }
         }
-
         Spacer(Modifier.height(14.dp))
         Card(shape = RoundedCornerShape(20.dp)) {
-            Row(
-                Modifier.fillMaxWidth().padding(20.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Row(Modifier.fillMaxWidth().padding(20.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("Wake words detected", fontWeight = FontWeight.Medium)
                 Text("$count", fontSize = 28.sp, fontWeight = FontWeight.Bold)
             }
