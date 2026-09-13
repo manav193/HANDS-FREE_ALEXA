@@ -10,7 +10,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
-import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.util.Log
 import android.widget.Toast
@@ -49,15 +48,13 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
     private lateinit var env: OrtEnvironment
 
     private var confidence = FloatArray(1)
-    private var averagedConfidence = 0f
     private var isListening = false
     private var audioRecord: AudioRecord? = null
     private var listenJob: Job? = null
-    private var mediaPlayer: MediaPlayer? = null
 
     private val requestPermissionLauncher: ActivityResultLauncher<String> =
-        context.registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
-            if (isGranted) startListeningForKeyword()
+        context.registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) startListeningForKeyword()
             else Toast.makeText(context, "Microphone permission is required", Toast.LENGTH_SHORT).show()
         }
 
@@ -71,7 +68,6 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
             embeddingModel = EmbeddingModel.newInstance(context)
             wakewordModel = AlexaCa2500015000100.newInstance(context)
             verifierOnnx = env.createSession(verifierModelPath)
-            mediaPlayer = MediaPlayer.create(context, R.raw.ping_sound)
         } catch (ex: Exception) {
             Log.e("openWakeWord", "FAILED TO LOAD MODELS", ex)
             Toast.makeText(context, "Wake-word model failed to load", Toast.LENGTH_LONG).show()
@@ -119,10 +115,7 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
             try {
                 while (isListening && !Thread.currentThread().isInterrupted) {
                     val floatsRead = recorder.read(newAudioData, 0, 1280, AudioRecord.READ_BLOCKING)
-                    if (floatsRead != 1280) {
-                        if (isListening) Log.w("openWakeWord", "AudioRecord read returned $floatsRead")
-                        continue
-                    }
+                    if (floatsRead != 1280) continue
                     bufferRawData()
                     bufferMelspec()
                     bufferEmbeddings()
@@ -149,16 +142,13 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
     }
 
     private suspend fun onWakeWordDetected(recorder: AudioRecord) {
-        // Release the microphone completely before Alexa starts.
+        // Stop and release our microphone BEFORE starting Amazon Alexa.
         isListening = false
         if (audioRecord === recorder) {
             releaseRecorderIfOwned(recorder)
             audioRecord = null
         }
 
-        // Do not play our own audio here. Alexa needs immediate exclusive access
-        // to the device audio path and some Android 10 firmware can stall when
-        // MediaPlayer and Alexa are started at the same time.
         withContext(Dispatchers.Main.immediate) {
             viewModel.addCount()
             launchAlexa()
@@ -167,6 +157,9 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
 
     private fun launchAlexa() {
         try {
+            // Tell MainActivity that Alexa owns the foreground now. The listener
+            // will be restarted from MainActivity.onResume() when Alexa returns.
+            context.markAlexaHandoff()
             val intent = Intent().apply {
                 component = ComponentName(
                     "com.amazon.dee.app",
@@ -175,7 +168,7 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(intent)
-            Log.d("ALEXA", "Alexa voice activity launched")
+            Log.d("ALEXA", "Alexa voice activity launched; listener paused")
         } catch (e: Exception) {
             Log.e("ALEXA", "Failed to launch Alexa", e)
             Toast.makeText(context, "Unable to open Alexa", Toast.LENGTH_SHORT).show()
@@ -196,8 +189,7 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
         } catch (e: Exception) {
             Log.w("AudioRecord", "Failed to stop recorder cleanly", e)
         } finally {
-            try { recorder.release() }
-            catch (e: Exception) { Log.w("AudioRecord", "Failed to release recorder", e) }
+            try { recorder.release() } catch (e: Exception) { Log.w("AudioRecord", "Failed to release recorder", e) }
             if (audioRecord === recorder) audioRecord = null
         }
     }
@@ -209,32 +201,25 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
     }
 
     private fun bufferMelspec() {
-        val melspecPredictions = melspecOnnxPredict(rawDataBuffer) ?: return
-        for (i in 0 until 68) for (j in 0 until 32)
-            melspecBuffer[0][i][j][0] = melspecBuffer[0][i + 8][j][0]
-        for (i in 0 until 8) for (j in 0 until 32)
-            melspecBuffer[0][68 + i][j][0] = 2 + melspecPredictions[0][0][i][j] / 10
+        val p = melspecOnnxPredict(rawDataBuffer) ?: return
+        for (i in 0 until 68) for (j in 0 until 32) melspecBuffer[0][i][j][0] = melspecBuffer[0][i + 8][j][0]
+        for (i in 0 until 8) for (j in 0 until 32) melspecBuffer[0][68 + i][j][0] = 2 + p[0][0][i][j] / 10
     }
 
     private fun bufferEmbeddings() {
-        val embeddingPredictions = embeddingModelPredict(embeddingInput(melspecBuffer))
-        val newEmbeddings = embeddingPredictions.floatArray
-        for (i in 0 until 15) for (j in 0 until 96)
-            embeddingBuffer[0][i][j] = embeddingBuffer[0][i + 1][j]
+        val newEmbeddings = embeddingModelPredict(embeddingInput(melspecBuffer)).floatArray
+        for (i in 0 until 15) for (j in 0 until 96) embeddingBuffer[0][i][j] = embeddingBuffer[0][i + 1][j]
         for (j in 0 until 96) embeddingBuffer[0][15][j] = newEmbeddings[j]
     }
 
-    private fun melspecOnnxPredict(floatArray: FloatArray): Array<Array<Array<FloatArray>>>? =
-        runMelspecPrediction(FloatBuffer.wrap(floatArray))
+    private fun melspecOnnxPredict(floatArray: FloatArray): Array<Array<Array<FloatArray>>>? = runMelspecPrediction(FloatBuffer.wrap(floatArray))
 
     private fun runMelspecPrediction(inputData: FloatBuffer?): Array<Array<Array<FloatArray>>>? = try {
         val inputTensor = OnnxTensor.createTensor(env, inputData, longArrayOf(1, 1760))
         try {
             val inputs = HashMap<String, OnnxTensor>()
             inputs["input"] = inputTensor
-            melspecOnnx.run(inputs).use { result ->
-                (result[0] as OnnxTensor).value as Array<Array<Array<FloatArray>>>
-            }
+            melspecOnnx.run(inputs).use { result -> (result[0] as OnnxTensor).value as Array<Array<Array<FloatArray>>> }
         } finally { inputTensor.close() }
     } catch (e: Exception) {
         Log.e("openWakeWord", "Melspec inference failed", e)
@@ -245,35 +230,31 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
         val flattenedData = FloatArray(76 * 32)
         var index = 0
         for (i in 0 until 76) for (j in 0 until 32) flattenedData[index++] = data[0][i][j][0]
-        return ByteBuffer.allocateDirect(flattenedData.size * 4).order(ByteOrder.nativeOrder()).apply {
-            asFloatBuffer().put(flattenedData)
-        }
+        return ByteBuffer.allocateDirect(flattenedData.size * 4).order(ByteOrder.nativeOrder()).apply { asFloatBuffer().put(flattenedData) }
     }
 
     private fun embeddingModelPredict(byteBuffer: ByteBuffer): TensorBuffer {
-        val inputFeature0 = TensorBuffer.createFixedSize(intArrayOf(1, 76, 32, 1), DataType.FLOAT32)
-        inputFeature0.loadBuffer(byteBuffer)
-        return embeddingModel.process(inputFeature0).outputFeature0AsTensorBuffer
+        val input = TensorBuffer.createFixedSize(intArrayOf(1, 76, 32, 1), DataType.FLOAT32)
+        input.loadBuffer(byteBuffer)
+        return embeddingModel.process(input).outputFeature0AsTensorBuffer
     }
 
     private fun wakewordInput(data: Array<Array<FloatArray>>): ByteBuffer {
         val flattenedData = FloatArray(16 * 96)
         var index = 0
         for (i in 0 until 16) for (j in 0 until 96) flattenedData[index++] = data[0][i][j]
-        return ByteBuffer.allocateDirect(flattenedData.size * 4).order(ByteOrder.nativeOrder()).apply {
-            asFloatBuffer().put(flattenedData)
-        }
+        return ByteBuffer.allocateDirect(flattenedData.size * 4).order(ByteOrder.nativeOrder()).apply { asFloatBuffer().put(flattenedData) }
     }
 
     private fun wakewordModelPredict(byteBuffer: ByteBuffer): TensorBuffer {
-        val inputFeature0 = TensorBuffer.createFixedSize(intArrayOf(1, 16, 96), DataType.FLOAT32)
-        inputFeature0.loadBuffer(byteBuffer)
-        return wakewordModel.process(inputFeature0).outputFeature0AsTensorBuffer
+        val input = TensorBuffer.createFixedSize(intArrayOf(1, 16, 96), DataType.FLOAT32)
+        input.loadBuffer(byteBuffer)
+        return wakewordModel.process(input).outputFeature0AsTensorBuffer
     }
 
     private suspend fun getWakeWordPrediction(array: Array<Array<FloatArray>>) {
-        val wakewordPrediction = wakewordModelPredict(wakewordInput(array))
-        confidence = wakewordPrediction.floatArray
+        val prediction = wakewordModelPredict(wakewordInput(array))
+        confidence = prediction.floatArray
         withContext(Dispatchers.Main.immediate) { viewModel.updatePredictionScore(confidence) }
         addScore(confidence[0])
     }
@@ -304,12 +285,9 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
     private fun addScore(newScore: Float) {
         if (scoreQueue.size == maxScores) scoreQueue.pollFirst()
         scoreQueue.add(newScore)
-        averagedConfidence = scoreQueue.average().toFloat()
     }
 
     fun release() {
         stopListening()
-        try { mediaPlayer?.release() } catch (_: Exception) { }
-        mediaPlayer = null
     }
 }
