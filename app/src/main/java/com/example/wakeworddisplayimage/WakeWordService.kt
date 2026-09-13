@@ -15,27 +15,13 @@ import androidx.core.content.ContextCompat
 class WakeWordService : Service() {
     private var engine: OpenWakeWord? = null
     private var waitingForAlexa = false
+    private lateinit var notificationManager: NotificationManager
 
     override fun onCreate() {
         super.onCreate()
+        notificationManager = getSystemService(NotificationManager::class.java)
         createNotificationChannel()
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentTitle("Alexa hands-free active")
-            .setContentText("Listening for Alexa")
-            .setOngoing(true)
-            .setCategory(Notification.CATEGORY_SERVICE)
-            .build()
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
+        startForeground(NOTIFICATION_ID, buildNotification(0))
 
         if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             startDetector()
@@ -96,7 +82,21 @@ class WakeWordService : Service() {
     }
 
     private fun broadcastStatus(score: Float) {
-        sendBroadcast(Intent(ACTION_SCORE).setPackage(packageName).putExtra(EXTRA_SCORE, score))
+        val safeScore = score.coerceIn(0f, 1f)
+        val percent = (safeScore * 100f).toInt()
+        notificationManager.notify(NOTIFICATION_ID, buildNotification(percent))
+        sendBroadcast(Intent(ACTION_SCORE).setPackage(packageName).putExtra(EXTRA_SCORE, safeScore))
+    }
+
+    private fun buildNotification(percent: Int): Notification {
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setContentTitle("Alexa hands-free active")
+            .setContentText("Wake-word confidence: $percent% • Alexa / Alex / Lexa")
+            .setProgress(100, percent, false)
+            .setOngoing(true)
+            .setCategory(Notification.CATEGORY_SERVICE)
+            .build()
     }
 
     private fun broadcastWakeWord() {
@@ -124,7 +124,7 @@ class WakeWordService : Service() {
             ).apply {
                 description = "Keeps the wake-word detector active while the tablet is on the home screen."
             }
-            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+            notificationManager.createNotificationChannel(channel)
         }
     }
 
