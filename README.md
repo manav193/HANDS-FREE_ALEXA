@@ -35,7 +35,7 @@ Amazon Alexa VoiceHandsFreeSearchActivity
 Android app resumes the wake-word service
 ```
 
-The microphone service is deliberately started while the app is visible and microphone permission has already been granted. This is important for newer Android versions because foreground microphone services have while-in-use and background-start restrictions. Android requires the microphone foreground-service type for long-running microphone capture on Android 11+ and requires the additional foreground-service microphone permission for apps targeting Android 14+. cite-placeholder
+The microphone service is deliberately started while the app is visible and microphone permission has already been granted. This is important for newer Android versions because foreground microphone services have while-in-use and background-start restrictions.
 
 ## Build
 
