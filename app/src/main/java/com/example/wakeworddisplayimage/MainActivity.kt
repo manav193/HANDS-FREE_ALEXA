@@ -5,8 +5,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -34,7 +36,10 @@ import com.example.wakeworddisplayimage.ui.theme.WakeWordDisplayImageTheme
 class MainActivity : ComponentActivity() {
     private val requestPermissionLauncher: ActivityResultLauncher<String> =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            if (granted) startWakeWordService()
+            if (granted) {
+                requestOverlayPermissionIfNeeded()
+                startWakeWordService()
+            }
         }
 
     private val serviceStateReceiver = object : BroadcastReceiver() {
@@ -44,9 +49,7 @@ class MainActivity : ComponentActivity() {
                     val score = intent.getFloatExtra(WakeWordService.EXTRA_SCORE, 0f)
                     dashboardViewModel?.updatePredictionScore(floatArrayOf(score))
                 }
-                WakeWordService.ACTION_COUNT -> {
-                    dashboardViewModel?.addCount()
-                }
+                WakeWordService.ACTION_COUNT -> dashboardViewModel?.addCount()
             }
         }
     }
@@ -83,16 +86,14 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
-        try {
-            unregisterReceiver(serviceStateReceiver)
-        } catch (_: IllegalArgumentException) {
-        }
+        try { unregisterReceiver(serviceStateReceiver) } catch (_: IllegalArgumentException) { }
         super.onStop()
     }
 
     override fun onResume() {
         super.onResume()
         if (hasMicPermission()) {
+            requestOverlayPermissionIfNeeded()
             startWakeWordService(WakeWordService.ACTION_RESUME)
         }
     }
@@ -104,6 +105,7 @@ class MainActivity : ComponentActivity() {
 
     private fun ensureWakeWordService() {
         if (hasMicPermission()) {
+            requestOverlayPermissionIfNeeded()
             startWakeWordService()
         } else {
             requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
@@ -112,6 +114,18 @@ class MainActivity : ComponentActivity() {
 
     private fun hasMicPermission(): Boolean =
         checkSelfPermission(Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    private fun requestOverlayPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            try {
+                val intent = Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
+                startActivity(intent)
+            } catch (_: Exception) { }
+        }
+    }
 
     private fun startWakeWordService(action: String? = null) {
         if (!hasMicPermission()) return
@@ -138,7 +152,7 @@ fun AlexaDashboard(viewModel: MainViewModel) {
             Text("MIC", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
         }
         Spacer(Modifier.height(18.dp))
-        Text(if (active) "Listening for “Alexa”" else "Microphone inactive", fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
+        Text(if (active) "Listening for “Alexa / Alex / Lexa”" else "Microphone inactive", fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
         Text("Works from the home screen via foreground service", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(28.dp))
         Card(Modifier.fillMaxWidth(), RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
