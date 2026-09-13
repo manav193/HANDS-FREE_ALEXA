@@ -1,0 +1,9 @@
+# Core LAN transport
+websockets>=12,<16
+
+# Cross-platform GUI automation
+pyautogui>=0.9.54
+
+# Windows UI automation
+pywin32>=306
+uiautomation>=2.0.18
