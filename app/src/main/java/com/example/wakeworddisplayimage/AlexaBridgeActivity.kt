@@ -38,16 +38,12 @@ class AlexaBridgeActivity : Activity() {
         if (requestCode == REQUEST_ALEXA) resumeDetectorAndFinish()
     }
 
-    override fun onResume() {
-        super.onResume()
-        // If Alexa could not be launched, this bridge becomes visible again.
-        if (intent != null && !isFinishing && !isChangingConfigurations) {
-            // Do not restart here; onActivityResult handles a normal Alexa return.
-        }
-    }
-
     private fun resumeDetectorAndFinish() {
-        sendBroadcast(Intent(WakeWordService.ACTION_RESUME).setPackage(packageName))
+        // The service is already running in the foreground; this action clears
+        // waitingForAlexa and starts a fresh AudioRecord after Alexa returns.
+        startService(Intent(this, WakeWordService::class.java).apply {
+            action = WakeWordService.ACTION_RESUME
+        })
         finish()
     }
 }
