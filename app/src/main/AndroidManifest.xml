@@ -30,6 +30,13 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".AlexaBridgeActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@style/Theme.WakeWordAlexaBridge" />
+
         <service
             android:name=".WakeWordService"
             android:exported="false"
