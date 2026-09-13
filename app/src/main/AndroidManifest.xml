@@ -34,7 +34,6 @@
             android:name=".AlexaBridgeActivity"
             android:exported="false"
             android:excludeFromRecents="true"
-            android:noHistory="true"
             android:theme="@style/Theme.WakeWordAlexaBridge" />
 
         <service
