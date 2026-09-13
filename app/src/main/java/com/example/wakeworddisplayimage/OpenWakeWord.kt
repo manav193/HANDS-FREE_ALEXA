@@ -31,7 +31,8 @@ import java.util.LinkedList
 class OpenWakeWord(
     private val context: Context,
     private val viewModel: MainViewModel? = null,
-    private val onWakeWord: (() -> Unit)? = null
+    private val onWakeWord: (() -> Unit)? = null,
+    private val onScore: ((Float) -> Unit)? = null
 ) {
     private val gain = 100
     private val maxPatience = 20
@@ -222,7 +223,10 @@ class OpenWakeWord(
     private suspend fun getWakeWordPrediction(a: Array<Array<FloatArray>>) {
         val p = wakewordModelPredict(wakewordInput(a))
         confidence = p.floatArray
-        withContext(Dispatchers.Main.immediate) { viewModel?.updatePredictionScore(confidence) }
+        withContext(Dispatchers.Main.immediate) {
+            viewModel?.updatePredictionScore(confidence)
+            onScore?.invoke(confidence[0])
+        }
         addScore(confidence[0])
     }
 
