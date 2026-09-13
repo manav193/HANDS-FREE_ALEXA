@@ -5,6 +5,7 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
@@ -29,7 +30,11 @@ import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import java.util.LinkedList
 
-class OpenWakeWord(private val context: MainActivity, private val viewModel: MainViewModel) {
+class OpenWakeWord(
+    private val context: Context,
+    private val viewModel: MainViewModel? = null,
+    private val onWakeWordDetectedCallback: (() -> Unit)? = null
+) {
     private val gain = 100
     private val maxPatience = 20
     private val audioBufferSizeInBytes = 1280 * 4
@@ -49,11 +54,13 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
     private var audioRecord: AudioRecord? = null
     private var listenJob: Job? = null
 
-    private val requestPermissionLauncher: ActivityResultLauncher<String> =
-        context.registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            if (granted) startListeningForKeyword()
-            else Toast.makeText(context, "Microphone permission is required", Toast.LENGTH_SHORT).show()
-        }
+    private val requestPermissionLauncher: ActivityResultLauncher<String>? =
+        if (context is androidx.activity.ComponentActivity) {
+            context.registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+                if (granted) startListeningForKeyword()
+                else Toast.makeText(context, "Microphone permission is required", Toast.LENGTH_SHORT).show()
+            }
+        } else null
 
     private fun initializeModels() {
         if (::env.isInitialized) return
@@ -72,7 +79,7 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
 
     private fun initializeMicrophone(): AudioRecord? {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            requestPermissionLauncher?.launch(Manifest.permission.RECORD_AUDIO)
             return null
         }
         val recorder = AudioRecord(MediaRecorder.AudioSource.MIC, 16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_FLOAT, audioBufferSizeInBytes)
@@ -99,7 +106,6 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
         listenJob = CoroutineScope(Dispatchers.IO).launch {
             var patience = 0
             try {
-                // Prevent stale audio immediately after Alexa releases the mic.
                 delay(1200)
                 while (isListening && !Thread.currentThread().isInterrupted) {
                     val floatsRead = recorder.read(newAudioData, 0, 1280, AudioRecord.READ_BLOCKING)
@@ -125,8 +131,8 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
         isListening = false
         if (audioRecord === recorder) releaseRecorderIfOwned(recorder)
         withContext(Dispatchers.Main.immediate) {
-            viewModel.addCount()
-            context.launchAlexaActivity()
+            viewModel?.addCount()
+            onWakeWordDetectedCallback?.invoke()
         }
     }
 
@@ -193,19 +199,25 @@ class OpenWakeWord(private val context: MainActivity, private val viewModel: Mai
     }
     private suspend fun getWakeWordPrediction(a: Array<Array<FloatArray>>) {
         val p = wakewordModelPredict(wakewordInput(a)); confidence = p.floatArray
-        withContext(Dispatchers.Main.immediate) { viewModel.updatePredictionScore(confidence) }
+        viewModel?.let { vm -> withContext(Dispatchers.Main.immediate) { vm.updatePredictionScore(confidence) } }
         addScore(confidence[0])
     }
     private fun verifierOnnxPredict(data: Array<Array<FloatArray>>): Float? {
-        val f = FloatArray(16 * 96); var x = 0
+        val f = FloatArray(16 * 96)
+        var x = 0
         for (i in 0 until 16) for (j in 0 until 96) f[x++] = data[0][i][j]
         return try {
-            val t = OnnxTensor.createTensor(env, FloatBuffer.wrap(f), longArrayOf(1, 1536))
-            try { verifierOnnx.run(hashMapOf("input" to t)).use { r ->
-                val s = r[1] as OnnxSequence
-                try { (s.getValue()[0].value as HashMap<*, *>)[1L] as Float } finally { s.close() }
-            } finally { t.close() }
-        } catch (e: Exception) { Log.e("openWakeWord", "Verifier inference failed", e); null }
+            val tensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(f), longArrayOf(1, 1536))
+            val result = verifierOnnx.run(hashMapOf("input" to tensor))
+            val sequence = result[1] as OnnxSequence
+            val value = sequence.getValue()[0].value as HashMap<*, *>
+            val score = value[1L] as Float
+            sequence.close(); result.close(); tensor.close()
+            score
+        } catch (e: Exception) {
+            Log.e("openWakeWord", "Verifier inference failed", e)
+            null
+        }
     }
     private fun addScore(newScore: Float) { if (scoreQueue.size == maxScores) scoreQueue.pollFirst(); scoreQueue.add(newScore) }
     fun release() { stopListening() }
