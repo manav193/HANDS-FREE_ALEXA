@@ -24,30 +24,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.example.wakeworddisplayimage.ui.theme.WakeWordDisplayImageTheme
 
 class MainActivity : ComponentActivity() {
-    private lateinit var openWakeWord: OpenWakeWord
-    private var waitingForAlexa = false
-
     private val requestPermissionLauncher: ActivityResultLauncher<String> =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            if (granted && !waitingForAlexa) openWakeWord.startListeningForKeyword()
-        }
-
-    private val alexaLauncher: ActivityResultLauncher<Intent> =
-        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-            if (waitingForAlexa) {
-                waitingForAlexa = false
-                openWakeWord.resetDetectionState()
-                startListenerIfPermitted()
-            }
+            if (granted) startWakeWordService()
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val viewModel: MainViewModel by viewModels()
-        openWakeWord = OpenWakeWord(this, viewModel)
         enableEdgeToEdge()
         setContent {
             WakeWordDisplayImageTheme {
@@ -56,39 +44,33 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        startListenerIfPermitted()
+        ensureWakeWordService()
     }
 
-    fun launchAlexaActivity() {
-        if (waitingForAlexa) return
-        try {
-            waitingForAlexa = true
-            alexaLauncher.launch(Intent().apply {
-                component = android.content.ComponentName(
-                    "com.amazon.dee.app",
-                    "com.amazon.alexa.voice.VoiceHandsFreeSearchActivity"
-                )
-            })
-        } catch (e: Exception) {
-            waitingForAlexa = false
-            android.util.Log.e("ALEXA", "Failed to launch Alexa", e)
-            android.widget.Toast.makeText(this, "Unable to open Alexa", android.widget.Toast.LENGTH_SHORT).show()
-            startListenerIfPermitted()
+    override fun onResume() {
+        super.onResume()
+        if (hasMicPermission()) {
+            startWakeWordService(WakeWordService.ACTION_RESUME)
         }
     }
 
-    private fun startListenerIfPermitted() {
-        if (!::openWakeWord.isInitialized || waitingForAlexa) return
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            openWakeWord.startListeningForKeyword()
+    private fun ensureWakeWordService() {
+        if (hasMicPermission()) {
+            startWakeWordService()
         } else {
             requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
-    override fun onDestroy() {
-        if (::openWakeWord.isInitialized) openWakeWord.release()
-        super.onDestroy()
+    private fun hasMicPermission(): Boolean =
+        checkSelfPermission(Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    private fun startWakeWordService(action: String? = null) {
+        if (!hasMicPermission()) return
+        val intent = Intent(this, WakeWordService::class.java).apply {
+            if (action != null) this.action = action
+        }
+        ContextCompat.startForegroundService(this, intent)
     }
 }
 
@@ -109,7 +91,7 @@ fun AlexaDashboard(viewModel: MainViewModel) {
         }
         Spacer(Modifier.height(18.dp))
         Text(if (active) "Listening for “Alexa”" else "Microphone inactive", fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
-        Text("Say Alexa to open Amazon Alexa", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Works from the home screen via foreground service", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(28.dp))
         Card(Modifier.fillMaxWidth(), RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
             Column(Modifier.padding(20.dp)) {
