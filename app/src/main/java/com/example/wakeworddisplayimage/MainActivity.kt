@@ -1,7 +1,11 @@
 package com.example.wakeworddisplayimage
 
 import android.Manifest
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -33,9 +37,26 @@ class MainActivity : ComponentActivity() {
             if (granted) startWakeWordService()
         }
 
+    private val serviceStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                WakeWordService.ACTION_SCORE -> {
+                    val score = intent.getFloatExtra(WakeWordService.EXTRA_SCORE, 0f)
+                    dashboardViewModel?.updatePredictionScore(floatArrayOf(score))
+                }
+                WakeWordService.ACTION_COUNT -> {
+                    dashboardViewModel?.addCount()
+                }
+            }
+        }
+    }
+
+    private var dashboardViewModel: MainViewModel? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val viewModel: MainViewModel by viewModels()
+        dashboardViewModel = viewModel
         enableEdgeToEdge()
         setContent {
             WakeWordDisplayImageTheme {
@@ -47,11 +68,38 @@ class MainActivity : ComponentActivity() {
         ensureWakeWordService()
     }
 
+    override fun onStart() {
+        super.onStart()
+        val filter = IntentFilter().apply {
+            addAction(WakeWordService.ACTION_SCORE)
+            addAction(WakeWordService.ACTION_COUNT)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(serviceStateReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(serviceStateReceiver, filter)
+        }
+    }
+
+    override fun onStop() {
+        try {
+            unregisterReceiver(serviceStateReceiver)
+        } catch (_: IllegalArgumentException) {
+        }
+        super.onStop()
+    }
+
     override fun onResume() {
         super.onResume()
         if (hasMicPermission()) {
             startWakeWordService(WakeWordService.ACTION_RESUME)
         }
+    }
+
+    override fun onDestroy() {
+        dashboardViewModel = null
+        super.onDestroy()
     }
 
     private fun ensureWakeWordService() {
