@@ -1,8 +1,4 @@
-"""Shared authenticated protocol for the Hands-Free Alexa desktop agents.
-
-Transport: WebSocket over a trusted LAN.
-Security: HMAC-SHA256 using a pre-shared token. No arbitrary shell execution.
-"""
+"""Shared authenticated protocol for the Hands-Free Alexa desktop agents."""
 
 from __future__ import annotations
 
@@ -11,7 +7,7 @@ import hmac
 import json
 import secrets
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 PROTOCOL_VERSION = 1
 MAX_MESSAGE_BYTES = 64 * 1024
@@ -31,8 +27,7 @@ def sign_message(payload: Dict[str, Any], token: str) -> str:
 
 
 def verify_message(payload: Dict[str, Any], signature: str, token: str) -> bool:
-    expected = sign_message(payload, token)
-    return hmac.compare_digest(expected, signature)
+    return hmac.compare_digest(sign_message(payload, token), signature)
 
 
 def make_request(command: str, args: Dict[str, Any], token: str) -> Dict[str, Any]:
@@ -65,7 +60,7 @@ def validate_envelope(envelope: Dict[str, Any], token: str) -> Dict[str, Any]:
     return payload
 
 
-def make_response(request_id: str, ok: bool, result: Any = None, error: str | None = None) -> Dict[str, Any]:
+def make_response(request_id: str, ok: bool, result: Any = None, error: Optional[str] = None) -> Dict[str, Any]:
     return {
         "v": PROTOCOL_VERSION,
         "type": "response",
